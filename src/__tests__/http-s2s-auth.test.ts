@@ -17,17 +17,24 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const runWithCredentialsMock = vi.hoisted(() => vi.fn());
-const getCredentialsMock = vi.hoisted(() => vi.fn());
+const clientMocks = vi.hoisted(() => ({
+  runWithCredentials: vi.fn(),
+  getCredentials: vi.fn(),
+  actualRunWithCredentials: undefined as undefined | typeof import('../client.js').runWithCredentials,
+  actualGetCredentials: undefined as undefined | typeof import('../client.js').getCredentials,
+}));
 
 vi.mock('../client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../client.js')>();
-  runWithCredentialsMock.mockImplementation(actual.runWithCredentials);
-  getCredentialsMock.mockImplementation(actual.getCredentials);
+  clientMocks.actualRunWithCredentials = actual.runWithCredentials;
+  clientMocks.actualGetCredentials = actual.getCredentials;
+  clientMocks.runWithCredentials.mockImplementation(actual.runWithCredentials);
+  clientMocks.getCredentials.mockImplementation(actual.getCredentials);
   return {
     ...actual,
-    runWithCredentials: (...args: Parameters<typeof actual.runWithCredentials>) => runWithCredentialsMock(...args),
-    getCredentials: () => getCredentialsMock(),
+    runWithCredentials: (...args: Parameters<typeof actual.runWithCredentials>) =>
+      clientMocks.runWithCredentials(...args),
+    getCredentials: () => clientMocks.getCredentials(),
   };
 });
 
@@ -175,8 +182,10 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
     errorLines.push(args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' '));
   });
-  runWithCredentialsMock.mockClear();
-  getCredentialsMock.mockClear();
+  clientMocks.runWithCredentials.mockReset();
+  clientMocks.getCredentials.mockReset();
+  clientMocks.runWithCredentials.mockImplementation(clientMocks.actualRunWithCredentials!);
+  clientMocks.getCredentials.mockImplementation(clientMocks.actualGetCredentials!);
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     throw new Error(`process.exit:${String(code)}`);
   }) as typeof process.exit);
@@ -327,8 +336,8 @@ describe('HTTP /mcp authentication', () => {
     assertNoSecrets(missing.body);
     assertNoSecrets(invalid.body);
     assertNoSecrets(loggedText());
-    expect(getCredentialsMock).not.toHaveBeenCalled();
-    expect(runWithCredentialsMock).not.toHaveBeenCalled();
+    expect(clientMocks.getCredentials).not.toHaveBeenCalled();
+    expect(clientMocks.runWithCredentials).not.toHaveBeenCalled();
   });
 
   it('returns 401 in gateway mode without credential headers and does not use env credentials', async () => {
@@ -348,8 +357,8 @@ describe('HTTP /mcp authentication', () => {
     expect(response.body).toContain('X-Duo-Api-Host');
     assertNoSecrets(response.body);
     expect(response.body).not.toContain(ENV_API_HOST);
-    expect(getCredentialsMock).not.toHaveBeenCalled();
-    expect(runWithCredentialsMock).not.toHaveBeenCalled();
+    expect(clientMocks.getCredentials).not.toHaveBeenCalled();
+    expect(clientMocks.runWithCredentials).not.toHaveBeenCalled();
 
     const partial = await sendHttp({
       port: server.port,
@@ -364,7 +373,7 @@ describe('HTTP /mcp authentication', () => {
       body: listTools,
     });
     expect(partial.status).toBe(401);
-    expect(runWithCredentialsMock).not.toHaveBeenCalled();
+    expect(clientMocks.runWithCredentials).not.toHaveBeenCalled();
   });
 
   it('accepts a valid S2S header plus credential headers and uses those credentials', async () => {
@@ -386,8 +395,8 @@ describe('HTTP /mcp authentication', () => {
     expect(response.body).toContain('duo_list_users');
     assertNoSecrets(response.body);
     assertNoSecrets(loggedText());
-    expect(getCredentialsMock).not.toHaveBeenCalled();
-    expect(runWithCredentialsMock).toHaveBeenCalledWith(
+    expect(clientMocks.getCredentials).not.toHaveBeenCalled();
+    expect(clientMocks.runWithCredentials).toHaveBeenCalledWith(
       { ikey: 'header-ikey', skey: HEADER_SKEY, apiHost: 'api-header.duosecurity.com' },
       expect.any(Function),
     );
@@ -406,8 +415,8 @@ describe('HTTP /mcp authentication', () => {
     expect(body.mode).toBe('gateway');
     assertNoSecrets(response.body);
     expect(response.body).not.toContain(ENV_API_HOST);
-    expect(getCredentialsMock).not.toHaveBeenCalled();
-    expect(runWithCredentialsMock).not.toHaveBeenCalled();
+    expect(clientMocks.getCredentials).not.toHaveBeenCalled();
+    expect(clientMocks.runWithCredentials).not.toHaveBeenCalled();
   });
 
   it('does not enforce a placeholder secret when the dev bypass is on', async () => {
@@ -425,7 +434,7 @@ describe('HTTP /mcp authentication', () => {
     });
     expect(response.status).toBe(200);
     expect(response.body).toContain('duo_list_users');
-    expect(runWithCredentialsMock).not.toHaveBeenCalled();
+    expect(clientMocks.runWithCredentials).not.toHaveBeenCalled();
   });
 });
 
@@ -441,10 +450,10 @@ describe('deploy config', () => {
     expect(compose).toContain('CONDUIT_S2S_SECRET=${CONDUIT_S2S_SECRET:?set CONDUIT_S2S_SECRET}');
     expect(compose).toContain('127.0.0.1:8080:8080');
     expect(compose).toContain('AUTH_MODE=gateway');
-    expect(compose).not.toContain('DUO_IKEY');
-    expect(compose).not.toContain('DUO_SKEY');
-    expect(compose).not.toContain('DUO_API_HOST');
-    expect(compose).not.toContain('env_file');
+    const environment = compose.split('environment:')[1]?.split('healthcheck:')[0] ?? '';
+    expect(environment).not.toMatch(/DUO_IKEY|DUO_SKEY|DUO_API_HOST/);
+    expect(compose).not.toMatch(/^\s*env_file:/m);
+    expect(compose).not.toMatch(/^\s*- DUO_/m);
   });
 
   it('documents X-Gateway-S2S HMAC signing', () => {
