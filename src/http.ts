@@ -158,10 +158,10 @@ function isDirectExecution(): boolean {
 /**
  * Start the Cisco Duo MCP Streamable HTTP server.
  *
- * Fails closed: a missing, blank, or placeholder CONDUIT_S2S_SECRET logs an
- * error and calls process.exit(1) before anything listens, unless
- * MCP_ALLOW_INSECURE_DEV=1 is set, which skips X-Gateway-S2S and binds
- * 127.0.0.1 only. With a secret, every /mcp request must carry a valid
+ * Fails closed: a missing, blank, or known-placeholder CONDUIT_S2S_SECRET is
+ * treated as no secret, logs an error, and calls process.exit(1) before
+ * anything listens. Only MCP_ALLOW_INSECURE_DEV=1 lets it start without a
+ * usable secret; it then skips X-Gateway-S2S and binds 127.0.0.1 only. With a secret, every /mcp request must carry a valid
  * X-Gateway-S2S header; /health stays unauthenticated.
  *
  * @returns The listening `Server`, once `listen` has succeeded.
@@ -175,7 +175,15 @@ export async function startHttpServer(): Promise<Server> {
   const isGatewayMode = process.env.AUTH_MODE === 'gateway';
 
   const httpServer = createHttpServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    // Fixed base: a malformed Host header must not throw before auth.
+    let url: URL;
+    try {
+      url = new URL(req.url || '/', 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Bad request' }));
+      return;
+    }
 
     if (url.pathname === '/health') {
       // /health is container LIVENESS, not credential-readiness. It stays
