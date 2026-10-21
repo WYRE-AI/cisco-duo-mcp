@@ -161,8 +161,10 @@ function isDirectExecution(): boolean {
  * Fails closed: a missing, blank, or known-placeholder CONDUIT_S2S_SECRET is
  * treated as no secret, logs an error, and calls process.exit(1) before
  * anything listens. Only MCP_ALLOW_INSECURE_DEV=1 lets it start without a
- * usable secret; it then skips X-Gateway-S2S and binds 127.0.0.1 only. With a secret, every /mcp request must carry a valid
- * X-Gateway-S2S header; /health stays unauthenticated.
+ * usable secret; it then skips X-Gateway-S2S and binds 127.0.0.1 only. With a
+ * secret, every /mcp request must carry a valid X-Gateway-S2S header; /health
+ * stays unauthenticated. The listener speaks plain HTTP (no in-process TLS), so
+ * expose it only behind a TLS-terminating trusted ingress or on a private network.
  *
  * @returns The listening `Server`, once `listen` has succeeded.
  * @throws Rejects with the bind error (for example EADDRINUSE or EACCES) if
