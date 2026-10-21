@@ -57,8 +57,6 @@ const mac = createHmac('sha256', process.env.CONDUIT_S2S_SECRET).update(`t=${t}`
 const xGatewayS2s = `t=${t},v1=${mac}`;
 ```
 
-**Transport security:** the HTTP transport speaks plain HTTP and does not terminate TLS. `X-Gateway-S2S` authenticates the caller but does not encrypt anything, and in gateway mode `X-Duo-Skey` travels in a request header. Only expose the listener behind a TLS-terminating trusted ingress (for example internal-only ingress on Azure Container Apps) or on a private network, never directly to an untrusted network.
-
 In `AUTH_MODE=gateway`, `/mcp` also requires `X-Duo-Ikey`, `X-Duo-Skey`, and `X-Duo-Api-Host`. Those headers are the only credential source for that request. A request missing any of them returns 401 and does not fall back to `DUO_*`.
 
 ```javascript
