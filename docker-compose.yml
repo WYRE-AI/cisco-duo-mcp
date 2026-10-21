@@ -8,11 +8,16 @@ services:
   cisco-duo-mcp:
     build: .
     ports:
+      # Host side is loopback only, so the plain-HTTP hop never leaves this
+      # machine. For anything else, put a TLS proxy in front or use
+      # MCP_TLS_CERT_FILE / MCP_TLS_KEY_FILE instead.
       - "127.0.0.1:8080:8080"
     environment:
       - MCP_TRANSPORT=http
       - MCP_HTTP_PORT=8080
       - MCP_HTTP_HOST=0.0.0.0
+      # Required for the 0.0.0.0 bind; safe only because of the loopback publish above.
+      - MCP_TRUSTED_TLS_INGRESS=1
       - AUTH_MODE=gateway
       - LOG_LEVEL=info
       - NODE_ENV=production

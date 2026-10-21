@@ -38,10 +38,24 @@ Copy [`.env.example`](.env.example) and set the variables below. Leave `CONDUIT_
 | `CONDUIT_S2S_SECRET` | Required to start the HTTP transport. The process logs an error and exits non-zero when this is empty or a known placeholder (`changeme`, `placeholder`, `your-s2s-secret`, `replace-me`, an unresolved `${...}` or `<...>` template, and the other values listed in `src/http.ts`). Compose will not start when it is unset. Never commit a real value. The value is never logged. |
 | `MCP_ALLOW_INSECURE_DEV` | Set to exactly `1` only for local development to start HTTP without a usable `CONDUIT_S2S_SECRET`. The process logs a warning, does not enforce `X-Gateway-S2S`, and listens on `127.0.0.1` only. A non-loopback `MCP_HTTP_HOST` (including `0.0.0.0`) is ignored and the override is logged. |
 | `MCP_HTTP_HOST` | Bind address when a real `CONDUIT_S2S_SECRET` is set. Unset keeps the historical default `0.0.0.0`. The container image sets `0.0.0.0`. Without a usable secret the listener is forced to `127.0.0.1`. |
+| `MCP_TLS_CERT_FILE` | PEM certificate path. Set together with `MCP_TLS_KEY_FILE` to serve HTTPS in-process. Setting only one of the two is a startup error. |
+| `MCP_TLS_KEY_FILE` | PEM private key path. Set together with `MCP_TLS_CERT_FILE`. |
+| `MCP_TRUSTED_TLS_INGRESS` | Set to exactly `1` when TLS terminates at a trusted ingress in front of this listener. Allows plain HTTP on a non-loopback bind and logs a warning. |
 | `MCP_HTTP_PORT` | HTTP port. Defaults to `8080`. |
 | `LOG_LEVEL` | `debug` \| `info` (default) \| `warn` \| `error`. |
 
 `/health` stays unauthenticated and does not read Duo credentials or the S2S secret.
+
+### Transport security (TLS)
+
+`X-Duo-Skey` and `X-Duo-Ikey` travel on every `/mcp` request, so a non-loopback bind refuses to start (exit 1) unless one of these is set:
+
+- `MCP_TLS_CERT_FILE` + `MCP_TLS_KEY_FILE`: the server serves HTTPS in-process.
+- `MCP_TRUSTED_TLS_INGRESS=1`: plain HTTP, with a logged warning. Use only when TLS terminates at a trusted ingress (for example Azure Container Apps internal ingress) and the hop to the listener is private.
+
+Loopback binds (`127.0.0.1`, any `127.0.0.0/8` address, `::1`, `localhost`) are always allowed over plain HTTP. Setting only one of the two TLS variables, or pointing at an unreadable file, is a startup error.
+
+Startup order: (1) the `CONDUIT_S2S_SECRET` check, (2) resolve the listen host, (3) the TLS/bind check, (4) listen. With a usable secret and `MCP_HTTP_HOST` unset, the host still defaults to `0.0.0.0`, so that case now refuses to start unless TLS or `MCP_TRUSTED_TLS_INGRESS=1` is configured. The container image binds `0.0.0.0` and does not set either, so deployments must.
 
 ### HTTP authentication
 
@@ -152,17 +166,18 @@ npm run lint   # tsc --noEmit
 
 ## Docker
 
-The image listens on `0.0.0.0` inside the container (`MCP_HTTP_HOST`) and defaults to `AUTH_MODE=gateway`. Publish the port on loopback and pass the S2S secret. In gateway mode, Duo credentials arrive on each request as headers; they are not read from the environment.
+The image listens on `0.0.0.0` inside the container (`MCP_HTTP_HOST`) and defaults to `AUTH_MODE=gateway`. Publish the port on loopback, pass the S2S secret, and set `MCP_TRUSTED_TLS_INGRESS=1` or the TLS file variables (see Transport security). In gateway mode, Duo credentials arrive on each request as headers; they are not read from the environment.
 
 ```bash
 docker build -t cisco-duo-mcp .
 docker run \
   -e CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
+  -e MCP_TRUSTED_TLS_INGRESS=1 \
   -p 127.0.0.1:8080:8080 \
   cisco-duo-mcp
 ```
 
-Compose refuses to start when `CONDUIT_S2S_SECRET` is unset or empty, sets `AUTH_MODE=gateway`, publishes `127.0.0.1:8080:8080`, and does not pass `DUO_IKEY`, `DUO_SKEY`, or `DUO_API_HOST` into the container:
+Compose refuses to start when `CONDUIT_S2S_SECRET` is unset or empty, sets `AUTH_MODE=gateway`, publishes `127.0.0.1:8080:8080`, sets `MCP_TRUSTED_TLS_INGRESS=1` (safe because the host publish is loopback-only), and does not pass `DUO_IKEY`, `DUO_SKEY`, or `DUO_API_HOST` into the container:
 
 ```bash
 CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" docker compose up
@@ -173,6 +188,7 @@ Single-tenant HTTP (`AUTH_MODE=env`) still requires the S2S secret, then uses `D
 ```bash
 docker run \
   -e CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
+  -e MCP_TRUSTED_TLS_INGRESS=1 \
   -e AUTH_MODE=env \
   -e DUO_IKEY="$DUO_IKEY" \
   -e DUO_SKEY="$DUO_SKEY" \

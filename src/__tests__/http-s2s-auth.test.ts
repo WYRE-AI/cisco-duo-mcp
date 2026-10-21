@@ -51,6 +51,9 @@ const ENV_KEYS = [
   'MCP_ALLOW_INSECURE_DEV',
   'MCP_HTTP_PORT',
   'MCP_HTTP_HOST',
+  'MCP_TRUSTED_TLS_INGRESS',
+  'MCP_TLS_CERT_FILE',
+  'MCP_TLS_KEY_FILE',
   'AUTH_MODE',
   'DUO_IKEY',
   'DUO_SKEY',
@@ -173,6 +176,9 @@ beforeEach(() => {
   delete process.env.CONDUIT_S2S_SECRET;
   delete process.env.MCP_ALLOW_INSECURE_DEV;
   delete process.env.MCP_HTTP_HOST;
+  delete process.env.MCP_TRUSTED_TLS_INGRESS;
+  delete process.env.MCP_TLS_CERT_FILE;
+  delete process.env.MCP_TLS_KEY_FILE;
   delete process.env.AUTH_MODE;
   delete process.env.DUO_IKEY;
   delete process.env.DUO_SKEY;
@@ -275,6 +281,7 @@ describe('HTTP startup', () => {
   it('honors MCP_HTTP_HOST when a real secret is set', async () => {
     process.env.CONDUIT_S2S_SECRET = S2S_SECRET;
     process.env.MCP_HTTP_HOST = '0.0.0.0';
+    process.env.MCP_TRUSTED_TLS_INGRESS = '1';
     const server = await listen();
     expect(server.address).toBe('0.0.0.0');
     expect(loggedText()).not.toContain('not 127.0.0.1');
@@ -283,6 +290,7 @@ describe('HTTP startup', () => {
 
   it('keeps the historical 0.0.0.0 default when a secret is set and MCP_HTTP_HOST is unset', async () => {
     process.env.CONDUIT_S2S_SECRET = S2S_SECRET;
+    process.env.MCP_TRUSTED_TLS_INGRESS = '1';
     const server = await listen();
     expect(server.address).toBe('0.0.0.0');
   });
@@ -450,6 +458,7 @@ describe('deploy config', () => {
     expect(compose).toContain('CONDUIT_S2S_SECRET=${CONDUIT_S2S_SECRET:?set CONDUIT_S2S_SECRET}');
     expect(compose).toContain('127.0.0.1:8080:8080');
     expect(compose).toContain('AUTH_MODE=gateway');
+    expect(compose).toContain('MCP_TRUSTED_TLS_INGRESS=1');
     const environment = compose.split('environment:')[1]?.split('healthcheck:')[0] ?? '';
     expect(environment).not.toMatch(/DUO_IKEY|DUO_SKEY|DUO_API_HOST/);
     expect(compose).not.toMatch(/^\s*env_file:/m);

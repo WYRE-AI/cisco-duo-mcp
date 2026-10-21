@@ -48,6 +48,8 @@ ENV NODE_ENV=production
 ENV LOG_LEVEL=info
 ENV MCP_TRANSPORT=http
 ENV MCP_HTTP_PORT=8080
+# Binding 0.0.0.0 makes the server refuse to start unless the deployment sets
+# MCP_TLS_CERT_FILE + MCP_TLS_KEY_FILE or MCP_TRUSTED_TLS_INGRESS=1.
 ENV MCP_HTTP_HOST=0.0.0.0
 ENV AUTH_MODE=gateway
 
