@@ -48,7 +48,7 @@ Copy [`.env.example`](.env.example) and set the variables below. Leave `CONDUIT_
 
 ### Transport security (TLS)
 
-`X-Duo-Skey` and `X-Duo-Ikey` travel on every `/mcp` request, so a non-loopback bind refuses to start (exit 1) unless one of these is set:
+In `AUTH_MODE=gateway`, `X-Duo-Skey` and `X-Duo-Ikey` travel on every `/mcp` request. Regardless of `AUTH_MODE`, a non-loopback bind refuses to start (exit 1) unless one of these is set:
 
 - `MCP_TLS_CERT_FILE` + `MCP_TLS_KEY_FILE`: the server serves HTTPS in-process.
 - `MCP_TRUSTED_TLS_INGRESS=1`: plain HTTP, with a logged warning. Use only when TLS terminates at a trusted ingress (for example Azure Container Apps internal ingress) and the hop to the listener is private.
