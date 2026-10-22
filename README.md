@@ -18,7 +18,7 @@ Three credential fields are required:
 
 Every request is signed fresh, per call, in `src/client.ts`'s `signV5Get()`. The 7-line canonical string (date, method, host, path, sorted query params, SHA-512 body hash, SHA-512 signed-headers hash) is joined with `\n` and HMAC-SHA512-signed with `skey`; the hex signature is sent as `Authorization: Basic base64(ikey:signature)` alongside a `Date` header carrying the exact same RFC 2822 timestamp that was signed. This connector is GET-only, so the body hash is always the digest of the empty string, and no additional `X-Duo-*` signed headers are used, so the header hash is always the digest of the empty string too.
 
-In gateway mode the three fields arrive per-request via `X-Duo-Ikey` / `X-Duo-Skey` / `X-Duo-Api-Host` headers, injected by the Conduit gateway. In local/stdio mode they're read once from `DUO_IKEY` / `DUO_SKEY` / `DUO_API_HOST`.
+In gateway mode the three fields arrive per-request via `X-Duo-Ikey` / `X-Duo-Skey` / `X-Duo-Api-Host` headers, injected by the Conduit gateway. They are not read from the environment, and a request missing any of them is rejected with 401. In local/stdio mode they're read once from `DUO_IKEY` / `DUO_SKEY` / `DUO_API_HOST`. The stdio transport does not use `CONDUIT_S2S_SECRET`.
 
 **What the credential itself can do vs. what this connector calls.** This connector's code is read-only by construction (see Scope, below), but that describes this codebase, not Duo's server-side enforcement. Duo Admin API integrations carry their own independently-configured permission grants (`Grant Read Resource`, `Grant Write Resource`, `Grant Read Log`, `Grant Read Settings`, `Grant Write Settings`, etc., set in the Duo Admin Panel when the integration is created) and Duo **does** enforce these server-side - an integration without `Grant Write Resource` gets a real authorization error from Duo itself on any write attempt, confirmed against Duo's docs and community reports of exactly that failure mode. This connector never exercises anything beyond read permissions, but the `ikey`/`skey` pair a customer supplies is only as narrowly scoped as the permissions they granted that integration in Duo - if a customer grants this integration `Grant Write Resource` (unnecessary for this connector), the credential itself would be capable of writes even though this connector's code never calls one. **Recommend granting this integration only `Grant Read Resource` (and `Grant Read Log` if the log tools are wanted) in Duo's Admin Panel** - least-privilege at the credential level, on top of this connector's own code-level restriction.
 
@@ -26,15 +26,67 @@ In gateway mode the three fields arrive per-request via `X-Duo-Ikey` / `X-Duo-Sk
 
 ## Configuration
 
+Copy [`.env.example`](.env.example) and set the variables below. Leave `CONDUIT_S2S_SECRET` empty in that file.
+
 | Env var | Description |
 |---|---|
-| `DUO_IKEY` | Duo integration key. |
-| `DUO_SKEY` | Duo secret key (HMAC-SHA512 signing secret). |
-| `DUO_API_HOST` | This account's Duo API hostname. |
+| `DUO_IKEY` | Duo integration key. Required for stdio and `AUTH_MODE=env`. Not set on the gateway Compose service. |
+| `DUO_SKEY` | Duo secret key (HMAC-SHA512 signing secret). Required for stdio and `AUTH_MODE=env`. Not set on the gateway Compose service. |
+| `DUO_API_HOST` | This account's Duo API hostname. Required for stdio and `AUTH_MODE=env`. Not set on the gateway Compose service. |
 | `MCP_TRANSPORT` | `stdio` (default) or `http`. |
-| `AUTH_MODE` | `env` (default, reads the vars above) or `gateway` (credentials arrive per-request via `X-Duo-Ikey`/`X-Duo-Skey`/`X-Duo-Api-Host` headers, injected by the Conduit gateway). |
-| `CONDUIT_S2S_SECRET` | When set, the HTTP transport requires a valid `X-Gateway-S2S` header (Conduit sidecar auth) on every `/mcp` request. |
+| `AUTH_MODE` | `env` (default, reads the vars above) or `gateway` (Docker image and Compose default). Gateway mode requires `X-Duo-Ikey`, `X-Duo-Skey`, and `X-Duo-Api-Host` on each `/mcp` request and never falls back to `DUO_*`. |
+| `CONDUIT_S2S_SECRET` | Required to start the HTTP transport. The process logs an error and exits non-zero when this is empty or a known placeholder (`changeme`, `placeholder`, `your-s2s-secret`, `replace-me`, an unresolved `${...}` or `<...>` template, and the other values listed in `src/http.ts`). Compose will not start when it is unset. Never commit a real value. The value is never logged. |
+| `MCP_ALLOW_INSECURE_DEV` | Set to exactly `1` only for local development to start HTTP without a usable `CONDUIT_S2S_SECRET`. The process logs a warning, does not enforce `X-Gateway-S2S`, and listens on `127.0.0.1` only. A non-loopback `MCP_HTTP_HOST` (including `0.0.0.0`) is ignored and the override is logged. |
+| `MCP_HTTP_HOST` | Bind address when a real `CONDUIT_S2S_SECRET` is set. Unset keeps the historical default `0.0.0.0`. The container image sets `0.0.0.0`. Without a usable secret the listener is forced to `127.0.0.1`. |
+| `MCP_TLS_CERT_FILE` | PEM certificate path. Set together with `MCP_TLS_KEY_FILE` to serve HTTPS in-process. Setting only one of the two is a startup error. |
+| `MCP_TLS_KEY_FILE` | PEM private key path. Set together with `MCP_TLS_CERT_FILE`. |
+| `MCP_TRUSTED_TLS_INGRESS` | Set to exactly `1` when TLS terminates at a trusted ingress in front of this listener. Allows plain HTTP on a non-loopback bind and logs a warning. |
+| `MCP_HTTP_PORT` | HTTP port. Defaults to `8080`. |
 | `LOG_LEVEL` | `debug` \| `info` (default) \| `warn` \| `error`. |
+
+`/health` stays unauthenticated and does not read Duo credentials or the S2S secret.
+
+### Transport security (TLS)
+
+In `AUTH_MODE=gateway`, `X-Duo-Skey` and `X-Duo-Ikey` travel on every `/mcp` request. Regardless of `AUTH_MODE`, a non-loopback bind refuses to start (exit 1) unless one of these is set:
+
+- `MCP_TLS_CERT_FILE` + `MCP_TLS_KEY_FILE`: the server serves HTTPS in-process.
+- `MCP_TRUSTED_TLS_INGRESS=1`: plain HTTP, with a logged warning. Use only when TLS terminates at a trusted ingress (for example Azure Container Apps internal ingress) and the hop to the listener is private.
+
+Loopback binds (`127.0.0.1`, any `127.0.0.0/8` address, `::1`, `localhost`) are always allowed over plain HTTP. Setting only one of the two TLS variables, or pointing at an unreadable file, is a startup error.
+
+Startup order: (1) the `CONDUIT_S2S_SECRET` check, (2) resolve the listen host, (3) the TLS/bind check, (4) listen. With a usable secret and `MCP_HTTP_HOST` unset, the host still defaults to `0.0.0.0`, so that case now refuses to start unless TLS or `MCP_TRUSTED_TLS_INGRESS=1` is configured. The container image binds `0.0.0.0` and does not set either, so deployments must.
+
+### HTTP authentication
+
+With `MCP_TRANSPORT=http` and a real `CONDUIT_S2S_SECRET`, every `/mcp` request must include `X-Gateway-S2S`. A missing or invalid header returns 401 before any Duo credential is read.
+
+The header value is `t=<unix seconds>,v1=<hex>`. `<hex>` is the lowercase hex HMAC-SHA256 of the ASCII string `t=<unix seconds>` (the same `t=` prefix), keyed with `CONDUIT_S2S_SECRET`. The timestamp must be within 300 seconds of the server clock. Example shape: `t=1710000000,v1=<64 lowercase hex chars>`.
+
+```javascript
+import { createHmac } from 'node:crypto';
+
+const t = Math.floor(Date.now() / 1000);
+const mac = createHmac('sha256', process.env.CONDUIT_S2S_SECRET).update(`t=${t}`).digest('hex');
+const xGatewayS2s = `t=${t},v1=${mac}`;
+```
+
+In `AUTH_MODE=gateway`, `/mcp` also requires `X-Duo-Ikey`, `X-Duo-Skey`, and `X-Duo-Api-Host`. Those headers are the only credential source for that request. A request missing any of them returns 401 and does not fall back to `DUO_*`.
+
+```javascript
+await fetch('http://127.0.0.1:8080/mcp', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    'x-gateway-s2s': xGatewayS2s,
+    'x-duo-ikey': ikey,
+    'x-duo-skey': skey,
+    'x-duo-api-host': apiHost,
+  },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+});
+```
 
 ## Tools
 
@@ -114,7 +166,39 @@ npm run lint   # tsc --noEmit
 
 ## Docker
 
+The image listens on `0.0.0.0` inside the container (`MCP_HTTP_HOST`) and defaults to `AUTH_MODE=gateway`. Publish the port on loopback, pass the S2S secret, and set `MCP_TRUSTED_TLS_INGRESS=1` or the TLS file variables (see Transport security). In gateway mode, Duo credentials arrive on each request as headers; they are not read from the environment.
+
 ```bash
 docker build -t cisco-duo-mcp .
-docker run -p 8080:8080 -e DUO_IKEY=... -e DUO_SKEY=... -e DUO_API_HOST=... cisco-duo-mcp
+docker run \
+  -e CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
+  -e MCP_TRUSTED_TLS_INGRESS=1 \
+  -p 127.0.0.1:8080:8080 \
+  cisco-duo-mcp
+```
+
+Compose refuses to start when `CONDUIT_S2S_SECRET` is unset or empty, sets `AUTH_MODE=gateway`, publishes `127.0.0.1:8080:8080`, sets `MCP_TRUSTED_TLS_INGRESS=1` (safe because the host publish is loopback-only), and does not pass `DUO_IKEY`, `DUO_SKEY`, or `DUO_API_HOST` into the container:
+
+```bash
+CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" docker compose up
+```
+
+Single-tenant HTTP (`AUTH_MODE=env`) still requires the S2S secret, then uses `DUO_IKEY`, `DUO_SKEY`, and `DUO_API_HOST`:
+
+```bash
+docker run \
+  -e CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
+  -e MCP_TRUSTED_TLS_INGRESS=1 \
+  -e AUTH_MODE=env \
+  -e DUO_IKEY="$DUO_IKEY" \
+  -e DUO_SKEY="$DUO_SKEY" \
+  -e DUO_API_HOST="$DUO_API_HOST" \
+  -p 127.0.0.1:8080:8080 \
+  cisco-duo-mcp
+```
+
+Local HTTP without a secret is development-only. It binds `127.0.0.1` even if `MCP_HTTP_HOST` is `0.0.0.0`, and logs a warning:
+
+```bash
+MCP_TRANSPORT=http MCP_ALLOW_INSECURE_DEV=1 npm run start:http
 ```
