@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createServer } from './server.js';
 import { runWithCredentials } from './client.js';
 import { logger } from './utils/logger.js';
+import { MAX_REQUEST_BODY_BYTES } from './input-limits.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
 
 /**
@@ -305,6 +306,21 @@ export async function startHttpServer(): Promise<Server | HttpsServer> {
       return;
     }
 
+    // Body cap runs only after S2S passes so unauthenticated callers still get 401.
+    const contentLength = Number(req.headers['content-length']);
+    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32600, message: `Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes` },
+          id: null,
+        })
+      );
+      return;
+    }
+
+
     // node:http does not await this listener. Catch a rejected connect or
     // handleRequest so one bad request cannot crash the process. The log
     // stays generic because error text can echo tenant credentials.
@@ -327,6 +343,7 @@ export async function startHttpServer(): Promise<Server | HttpsServer> {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
+        maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
       });
       res.on('close', () => {
         transport.close();

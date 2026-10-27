@@ -1,6 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { ALL_TOOLS, dispatchToolCall } from './tools/index.js';
+import { toolInputTooLarge, toolInputTooLargeResult } from './input-limits.js';
 import { logger } from './utils/logger.js';
 
 export function createServer(): Server {
@@ -13,6 +14,7 @@ export function createServer(): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    if (toolInputTooLarge(args)) return toolInputTooLargeResult(name);
     try {
       return await dispatchToolCall(name, (args || {}) as Record<string, unknown>);
     } catch (error) {
