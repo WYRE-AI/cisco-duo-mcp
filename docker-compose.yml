@@ -1,0 +1,30 @@
+# Gateway mode. Duo credentials arrive per request on X-Duo-Ikey,
+# X-Duo-Skey, and X-Duo-Api-Host. Do not set DUO_IKEY, DUO_SKEY,
+# DUO_API_HOST, or env_file here — that would put static vendor credentials
+# in the container. The project .env is used only for Compose interpolation
+# of CONDUIT_S2S_SECRET. For AUTH_MODE=env, pass DUO_* on that process
+# instead (see the README).
+services:
+  cisco-duo-mcp:
+    build: .
+    ports:
+      # Host side is loopback only, so the plain-HTTP hop never leaves this
+      # machine. For anything else, put a TLS proxy in front or use
+      # MCP_TLS_CERT_FILE / MCP_TLS_KEY_FILE instead.
+      - "127.0.0.1:8080:8080"
+    environment:
+      - MCP_TRANSPORT=http
+      - MCP_HTTP_PORT=8080
+      - MCP_HTTP_HOST=0.0.0.0
+      # Required for the 0.0.0.0 bind; safe only because of the loopback publish above.
+      - MCP_TRUSTED_TLS_INGRESS=1
+      - AUTH_MODE=gateway
+      - LOG_LEVEL=info
+      - NODE_ENV=production
+      - CONDUIT_S2S_SECRET=${CONDUIT_S2S_SECRET:?set CONDUIT_S2S_SECRET}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
